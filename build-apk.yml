@@ -1,0 +1,136 @@
+name: Build APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: "yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Montar projeto Android
+        run: |
+          mkdir -p proj/app/src/main/assets proj/app/src/main/java/com/rualivre/game
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p proj/app/src/main/res/mipmap-$d
+            cp icon.png proj/app/src/main/res/mipmap-$d/ic_launcher.png
+          done
+          cp index.html proj/app/src/main/assets/index.html
+          curl -fL -o proj/app/src/main/assets/three.min.js https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js
+          sed -i 's#https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js#three.min.js#' proj/app/src/main/assets/index.html
+          cat > proj/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "RuaLivre"
+          include ':app'
+          EOF
+          cat > proj/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+          cat > proj/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          EOF
+          cat > proj/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.rualivre.game'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.rualivre.game'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+          }
+          EOF
+          cat > proj/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="Rua Livre 3D"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:hardwareAccelerated="true"
+                  android:allowBackup="true"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="sensorLandscape"
+                      android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > proj/app/src/main/java/com/rualivre/game/MainActivity.java <<'EOF'
+          package com.rualivre.game;
+
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+              private WebView web;
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  web = new WebView(this);
+                  web.setBackgroundColor(Color.BLACK);
+                  web.setOverScrollMode(View.OVER_SCROLL_NEVER);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setAllowFileAccess(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+                  web.setWebViewClient(new WebViewClient());
+                  web.setWebChromeClient(new WebChromeClient());
+                  setContentView(web);
+                  web.loadUrl("file:///android_asset/index.html");
+              }
+
+              private void immersive() {
+                  getWindow().getDecorView().setSystemUiVisibility(
+                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+              }
+
+              @Override public void onWindowFocusChanged(boolean f) { super.onWindowFocusChanged(f); if (f) immersive(); }
+              @Override protected void onPause() { super.onPause(); web.onPause(); }
+              @Override protected void onResume() { super.onResume(); web.onResume(); }
+              @Override public void onBackPressed() { moveTaskToBack(true); }
+          }
+          EOF
+      - name: Compilar APK
+        working-directory: proj
+        run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RuaLivre-APK
+          path: proj/app/build/outputs/apk/debug/app-debug.apk
